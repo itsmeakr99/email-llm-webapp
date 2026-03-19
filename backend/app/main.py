@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
@@ -11,16 +11,17 @@ from app.models import (
     SendEmailResponse,
 )
 from app.services.email_service import (
-    build_google_auth_url,
+    build_google_auth_url_for_user,
     exchange_google_code_for_tokens,
-    send_email_via_gmail,
+    get_gmail_connection_status_for_user,
+    send_email_via_gmail_for_user,
 )
 from app.services.llm_service import generate_email_draft
 from app.settings import get_settings
 
 settings = get_settings()
 
-app = FastAPI(title=settings.app_name, version="2.0.0")
+app = FastAPI(title=settings.app_name, version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,30 +48,60 @@ def root() -> dict[str, str]:
         "docs": "/docs",
         "health": "/health",
         "google_auth_start": "/auth/google/start",
+        "gmail_status": "/gmail/status",
     }
 
 
 @app.get("/auth/google/start")
-def google_auth_start() -> RedirectResponse:
-    auth_url = build_google_auth_url()
-    return RedirectResponse(url=auth_url)
+def google_auth_start(authorization: str | None = Header(default=None)) -> dict[str, str]:
+    try:
+        auth_url = build_google_auth_url_for_user(authorization)
+        return {"auth_url": auth_url}
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to start Google OAuth: {exc}") from exc
 
 
 @app.get("/auth/google/callback")
 def google_auth_callback(
     code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
     error: str | None = Query(default=None),
-) -> dict:
+) -> RedirectResponse | dict[str, str]:
     if error:
         raise HTTPException(status_code=400, detail=f"Google OAuth failed: {error}")
 
     if not code:
         raise HTTPException(status_code=400, detail="Missing Google OAuth code.")
 
+    if not state:
+        raise HTTPException(status_code=400, detail="Missing Google OAuth state.")
+
     try:
-        return exchange_google_code_for_tokens(code)
+        result = exchange_google_code_for_tokens(code, state)
+
+        if settings.google_oauth_success_redirect_url:
+            separator = "&" if "?" in settings.google_oauth_success_redirect_url else "?"
+            redirect_to = f"{settings.google_oauth_success_redirect_url}{separator}gmail_connected=1"
+            return RedirectResponse(url=redirect_to)
+
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to complete Google OAuth: {exc}") from exc
+
+
+@app.get("/gmail/status")
+def gmail_status(authorization: str | None = Header(default=None)) -> dict[str, str | bool | None]:
+    try:
+        return get_gmail_connection_status_for_user(authorization)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read Gmail status: {exc}") from exc
+
 
 @app.post("/draft-email", response_model=DraftEmailResponse)
 def draft_email(request: DraftEmailRequest) -> DraftEmailResponse:
@@ -88,9 +119,12 @@ def draft_email(request: DraftEmailRequest) -> DraftEmailResponse:
 
 
 @app.post("/send-email", response_model=SendEmailResponse)
-def send_email(request: SendEmailRequest) -> SendEmailResponse:
+def send_email(
+    request: SendEmailRequest,
+    authorization: str | None = Header(default=None),
+) -> SendEmailResponse:
     try:
-        send_email_via_gmail(request)
+        send_email_via_gmail_for_user(request, authorization)
         return SendEmailResponse(
             success=True,
             message="Email sent successfully.",
@@ -100,13 +134,16 @@ def send_email(request: SendEmailRequest) -> SendEmailResponse:
             subject=request.subject,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to send email: {exc}") from exc
 
 
 @app.post("/generate-and-send", response_model=SendEmailResponse)
-def generate_and_send(request: GenerateAndSendRequest) -> SendEmailResponse:
+def generate_and_send(
+    request: GenerateAndSendRequest,
+    authorization: str | None = Header(default=None),
+) -> SendEmailResponse:
     try:
         draft = generate_email_draft(request)
         send_request = SendEmailRequest(
@@ -116,7 +153,7 @@ def generate_and_send(request: GenerateAndSendRequest) -> SendEmailResponse:
             subject=draft.subject,
             body=draft.body,
         )
-        send_email_via_gmail(send_request)
+        send_email_via_gmail_for_user(send_request, authorization)
         return SendEmailResponse(
             success=True,
             message="Email drafted and sent successfully.",
@@ -126,7 +163,7 @@ def generate_and_send(request: GenerateAndSendRequest) -> SendEmailResponse:
             subject=send_request.subject,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to generate and send email: {exc}") from exc
 
@@ -138,6 +175,6 @@ def debug_config() -> dict[str, bool]:
         "has_google_client_id": bool(s.google_client_id),
         "has_google_client_secret": bool(s.google_client_secret),
         "has_google_redirect_uri": bool(s.google_redirect_uri),
-        "has_google_sender_email": bool(s.google_sender_email),
-        "has_google_refresh_token": bool(s.google_refresh_token),
+        "has_supabase_url": bool(s.supabase_url),
+        "has_supabase_service_role_key": bool(s.supabase_service_role_key),
     }
