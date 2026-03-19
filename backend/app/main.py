@@ -9,13 +9,13 @@ from app.models import (
     SendEmailRequest,
     SendEmailResponse,
 )
-from app.services.email_service import send_email_via_smtp
+from app.services.email_service import send_email_via_resend
 from app.services.llm_service import generate_email_draft
 from app.settings import get_settings
 
 settings = get_settings()
 
-app = FastAPI(title=settings.app_name, version="1.1.0")
+app = FastAPI(title=settings.app_name, version="1.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -62,7 +62,7 @@ def draft_email(request: DraftEmailRequest) -> DraftEmailResponse:
 @app.post("/send-email", response_model=SendEmailResponse)
 def send_email(request: SendEmailRequest) -> SendEmailResponse:
     try:
-        send_email_via_smtp(request)
+        send_email_via_resend(request)
         return SendEmailResponse(
             success=True,
             message="Email sent successfully.",
@@ -88,7 +88,7 @@ def generate_and_send(request: GenerateAndSendRequest) -> SendEmailResponse:
             subject=draft.subject,
             body=draft.body,
         )
-        send_email_via_smtp(send_request)
+        send_email_via_resend(send_request)
         return SendEmailResponse(
             success=True,
             message="Email drafted and sent successfully.",
