@@ -3,15 +3,13 @@ import hashlib
 import hmac
 import json
 import time
-from functools import lru_cache
 
 from supabase import Client, create_client
 
 from app.settings import get_settings
 
 
-@lru_cache
-def get_supabase_admin_client() -> Client:
+def _create_supabase_client() -> Client:
     settings = get_settings()
 
     required = {
@@ -41,8 +39,9 @@ def _extract_bearer_token(authorization: str | None) -> str:
 
 def get_current_app_user(authorization: str | None) -> dict[str, str]:
     token = _extract_bearer_token(authorization)
-    supabase = get_supabase_admin_client()
 
+    # Fresh client only for auth verification
+    supabase = _create_supabase_client()
     response = supabase.auth.get_user(token)
     user = response.user
 
@@ -106,25 +105,29 @@ def read_google_state(state: str, max_age_seconds: int = 900) -> str:
 
 
 def save_gmail_account(user_id: str, gmail_email: str, refresh_token: str) -> None:
-    supabase = get_supabase_admin_client()
+    # Fresh client only for admin DB write
+    supabase = _create_supabase_client()
 
-    (
+    response = (
         supabase.table("gmail_accounts")
         .upsert(
             {
                 "user_id": user_id,
                 "gmail_email": gmail_email,
                 "google_refresh_token": refresh_token,
-                "updated_at": "now()",
             },
             on_conflict="user_id",
         )
         .execute()
     )
 
+    if getattr(response, "data", None) is None:
+        raise RuntimeError("Failed to save Gmail account in Supabase.")
+
 
 def get_gmail_account(user_id: str) -> dict | None:
-    supabase = get_supabase_admin_client()
+    # Fresh client only for admin DB read
+    supabase = _create_supabase_client()
 
     response = (
         supabase.table("gmail_accounts")
