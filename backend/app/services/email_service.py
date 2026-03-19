@@ -1,29 +1,20 @@
 import base64
+import json
 from email.message import EmailMessage
 from pathlib import Path
+from urllib import parse, request as urllib_request, error as urllib_error
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
 from app.models import SendEmailRequest
 from app.settings import get_settings
 
 GOOGLE_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
+GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 TOKEN_FILE_PATH = Path("google_token.txt")
-
-
-def _client_config(settings) -> dict:
-    return {
-        "web": {
-            "client_id": settings.google_client_id,
-            "client_secret": settings.google_client_secret,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": GOOGLE_TOKEN_URI,
-        }
-    }
 
 
 def _load_refresh_token(settings) -> str:
@@ -48,6 +39,30 @@ def build_google_auth_url() -> str:
 
     required = {
         "GOOGLE_CLIENT_ID": settings.google_client_id,
+        "GOOGLE_REDIRECT_URI": settings.google_redirect_uri,
+    }
+    missing = [key for key, value in required.items() if not value]
+    if missing:
+        raise ValueError(f"Missing Google OAuth configuration: {', '.join(missing)}")
+
+    params = {
+        "client_id": settings.google_client_id,
+        "redirect_uri": settings.google_redirect_uri,
+        "response_type": "code",
+        "scope": " ".join(GOOGLE_SCOPES),
+        "access_type": "offline",
+        "prompt": "consent",
+        "include_granted_scopes": "true",
+    }
+
+    return f"{GOOGLE_AUTH_URI}?{parse.urlencode(params)}"
+
+
+def exchange_google_code_for_tokens(code: str) -> dict:
+    settings = get_settings()
+
+    required = {
+        "GOOGLE_CLIENT_ID": settings.google_client_id,
         "GOOGLE_CLIENT_SECRET": settings.google_client_secret,
         "GOOGLE_REDIRECT_URI": settings.google_redirect_uri,
     }
@@ -55,48 +70,45 @@ def build_google_auth_url() -> str:
     if missing:
         raise ValueError(f"Missing Google OAuth configuration: {', '.join(missing)}")
 
-    flow = Flow.from_client_config(
-        _client_config(settings),
-        scopes=GOOGLE_SCOPES,
-        redirect_uri=settings.google_redirect_uri,
+    payload = parse.urlencode(
+        {
+            "code": code,
+            "client_id": settings.google_client_id,
+            "client_secret": settings.google_client_secret,
+            "redirect_uri": settings.google_redirect_uri,
+            "grant_type": "authorization_code",
+        }
+    ).encode("utf-8")
+
+    req = urllib_request.Request(
+        GOOGLE_TOKEN_URI,
+        data=payload,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
     )
 
-    auth_url, _ = flow.authorization_url(
-        access_type="offline",
-        prompt="consent",
-        include_granted_scopes="true",
-    )
-    return auth_url
+    try:
+        with urllib_request.urlopen(req, timeout=30) as response:
+            body = response.read().decode("utf-8")
+            token_data = json.loads(body)
 
+    except urllib_error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Google token exchange failed: {body}") from exc
 
-def exchange_google_code_for_tokens(code: str) -> dict:
-    settings = get_settings()
-
-    flow = Flow.from_client_config(
-        _client_config(settings),
-        scopes=GOOGLE_SCOPES,
-        redirect_uri=settings.google_redirect_uri,
-    )
-
-    flow.fetch_token(code=code)
-    credentials = flow.credentials
-
-    refresh_token = credentials.refresh_token or _load_refresh_token(settings)
+    refresh_token = token_data.get("refresh_token") or _load_refresh_token(settings)
     if not refresh_token:
         raise ValueError(
-            "Google did not return a refresh token. Reconnect Gmail and make sure consent is granted."
+            "Google did not return a refresh token. Revoke the app in your Google account, "
+            "then retry with prompt=consent, or use a fresh OAuth client."
         )
 
     _save_refresh_token(refresh_token)
 
     return {
-        "refresh_token_saved": True,
-        "has_refresh_token": bool(refresh_token),
-        "message": (
-            "Gmail connected successfully. "
-            "For permanent storage on Render, copy this refresh token into GOOGLE_REFRESH_TOKEN."
-        ),
+        "message": "Gmail connected successfully.",
         "refresh_token": refresh_token,
+        "has_refresh_token": True,
     }
 
 
@@ -142,8 +154,6 @@ def send_email_via_gmail(request: SendEmailRequest) -> None:
     message["To"] = ", ".join(request.to)
     if request.cc:
         message["Cc"] = ", ".join(request.cc)
-    if request.bcc:
-        message["Bcc"] = ", ".join(request.bcc)
     message["Subject"] = request.subject
     message.set_content(request.body)
 
