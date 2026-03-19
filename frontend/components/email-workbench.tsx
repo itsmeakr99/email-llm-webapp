@@ -2,7 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { draftEmail, healthCheck, sendEmail } from "@/lib/api";
+import {
+  draftEmail,
+  getGmailStatus,
+  getGoogleAuthUrl,
+  healthCheck,
+  sendEmail,
+} from "@/lib/api";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { AuthPanel } from "@/components/auth-panel";
 
@@ -54,9 +60,12 @@ export function EmailWorkbench() {
   const [form, setForm] = useState<FormState>(initialState);
   const [isDrafting, setIsDrafting] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isConnectingGmail, setIsConnectingGmail] = useState(false);
   const [status, setStatus] = useState<string>("Ready");
   const [error, setError] = useState<string>("");
   const [apiState, setApiState] = useState<string>("Checking backend...");
+  const [gmailConnected, setGmailConnected] = useState(false);
+  const [connectedGmailEmail, setConnectedGmailEmail] = useState<string | null>(null);
 
   useEffect(() => {
     healthCheck()
@@ -125,6 +134,50 @@ export function EmailWorkbench() {
     window.localStorage.setItem(storageKey, JSON.stringify(form));
   }, [form, user]);
 
+  useEffect(() => {
+    if (!user) {
+      setGmailConnected(false);
+      setConnectedGmailEmail(null);
+      return;
+    }
+
+    async function loadGmailStatus() {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const accessToken = data.session?.access_token;
+        if (!accessToken) return;
+
+        const result = await getGmailStatus(accessToken);
+        setGmailConnected(result.connected);
+        setConnectedGmailEmail(result.gmail_email);
+      } catch {
+        setGmailConnected(false);
+        setConnectedGmailEmail(null);
+      }
+    }
+
+    loadGmailStatus();
+  }, [user]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("gmail_connected") === "1") {
+      setStatus("Gmail connected successfully.");
+      setError("");
+      window.history.replaceState({}, "", window.location.pathname);
+      if (user) {
+        supabase.auth.getSession().then(async ({ data }) => {
+          const accessToken = data.session?.access_token;
+          if (!accessToken) return;
+          const result = await getGmailStatus(accessToken);
+          setGmailConnected(result.connected);
+          setConnectedGmailEmail(result.gmail_email);
+        });
+      }
+    }
+  }, [user]);
+
   const recipientCount = useMemo(() => splitEmails(form.to).length, [form.to]);
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
@@ -168,13 +221,27 @@ export function EmailWorkbench() {
     setIsSending(true);
 
     try {
-      const response = await sendEmail({
-        to: splitEmails(form.to),
-        cc: splitEmails(form.cc),
-        bcc: splitEmails(form.bcc),
-        subject: form.subject,
-        body: form.body,
-      });
+      const { data } = await supabase.auth.getSession();
+      const accessToken = data.session?.access_token;
+
+      if (!accessToken) {
+        throw new Error("You are not signed in. Please sign in again.");
+      }
+
+      if (!gmailConnected) {
+        throw new Error("Connect your Gmail account before sending email.");
+      }
+
+      const response = await sendEmail(
+        {
+          to: splitEmails(form.to),
+          cc: splitEmails(form.cc),
+          bcc: splitEmails(form.bcc),
+          subject: form.subject,
+          body: form.body,
+        },
+        accessToken
+      );
 
       setStatus(`${response.message} Subject: ${response.subject}`);
     } catch (err) {
@@ -182,6 +249,28 @@ export function EmailWorkbench() {
       setStatus("Send failed.");
     } finally {
       setIsSending(false);
+    }
+  }
+
+  async function handleConnectGmail() {
+    setError("");
+    setStatus("Starting Gmail connection...");
+    setIsConnectingGmail(true);
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      const accessToken = data.session?.access_token;
+
+      if (!accessToken) {
+        throw new Error("You are not signed in. Please sign in again.");
+      }
+
+      const result = await getGoogleAuthUrl(accessToken);
+      window.location.href = result.auth_url;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start Gmail connection.");
+      setStatus("Gmail connection failed.");
+      setIsConnectingGmail(false);
     }
   }
 
@@ -233,7 +322,8 @@ export function EmailWorkbench() {
     isSending ||
     !form.subject.trim() ||
     !form.body.trim() ||
-    splitEmails(form.to).length === 0;
+    splitEmails(form.to).length === 0 ||
+    !gmailConnected;
 
   if (!authReady) {
     return (
@@ -276,8 +366,12 @@ export function EmailWorkbench() {
             <strong>{recipientCount}</strong>
           </div>
           <div className="stat-card">
-            <span>Account</span>
-            <strong>{user.email}</strong>
+            <span>Gmail</span>
+            <strong>
+              {gmailConnected
+                ? `Connected: ${connectedGmailEmail ?? "Connected"}`
+                : "Not connected"}
+            </strong>
           </div>
         </div>
       </section>
@@ -293,6 +387,18 @@ export function EmailWorkbench() {
                 onClick={loadSample}
               >
                 Load sample
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleConnectGmail}
+                disabled={isConnectingGmail}
+              >
+                {isConnectingGmail
+                  ? "Connecting..."
+                  : gmailConnected
+                  ? "Reconnect Gmail"
+                  : "Connect Gmail"}
               </button>
               <button type="button" className="ghost-button" onClick={clearAll}>
                 Clear
@@ -448,7 +554,7 @@ export function EmailWorkbench() {
               disabled={disableSend}
               onClick={handleSend}
             >
-              {isSending ? "Sending..." : "Send email"}
+              {isSending ? "Sending..." : gmailConnected ? "Send email" : "Connect Gmail to send"}
             </button>
           </div>
         </div>
