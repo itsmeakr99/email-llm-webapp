@@ -1,38 +1,78 @@
-import smtplib
-from email.message import EmailMessage
+import html
+import json
+from urllib import error, request as urllib_request
+
 from app.models import SendEmailRequest
 from app.settings import get_settings
 
 
+def _build_from_header(from_email: str, from_name: str) -> str:
+    from_name = (from_name or "").strip()
+    if from_name:
+        return f"{from_name} <{from_email}>"
+    return from_email
 
-def send_email_via_smtp(request: SendEmailRequest) -> None:
+
+def _text_to_html(text: str) -> str:
+    escaped = html.escape(text or "")
+    return f"<div>{escaped.replace(chr(10), '<br>')}</div>"
+
+
+def send_email_via_resend(request: SendEmailRequest) -> None:
     settings = get_settings()
 
     required = {
-        "SMTP_HOST": settings.smtp_host,
-        "SMTP_USERNAME": settings.smtp_username,
-        "SMTP_PASSWORD": settings.smtp_password,
-        "SMTP_FROM_EMAIL": settings.smtp_from_email,
+        "RESEND_API_KEY": settings.resend_api_key,
+        "RESEND_FROM_EMAIL": settings.resend_from_email,
     }
     missing = [key for key, value in required.items() if not value]
     if missing:
-        raise ValueError(f"Missing SMTP configuration: {', '.join(missing)}")
+        raise ValueError(f"Missing Resend configuration: {', '.join(missing)}")
 
-    msg = EmailMessage()
-    from_name = settings.smtp_from_name.strip()
-    msg["From"] = f"{from_name} <{settings.smtp_from_email}>" if from_name else settings.smtp_from_email
-    msg["To"] = ", ".join(request.to)
+    payload = {
+        "from": _build_from_header(
+            settings.resend_from_email,
+            settings.resend_from_name,
+        ),
+        "to": request.to,
+        "subject": request.subject,
+        "html": _text_to_html(request.body),
+    }
+
     if request.cc:
-        msg["Cc"] = ", ".join(request.cc)
-    msg["Subject"] = request.subject
-    msg.set_content(request.body)
+        payload["cc"] = request.cc
 
-    all_recipients = list(request.to) + list(request.cc) + list(request.bcc)
+    if request.bcc:
+        payload["bcc"] = request.bcc
 
-    with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as server:
-        server.ehlo()
-        if settings.smtp_use_tls:
-            server.starttls()
-            server.ehlo()
-        server.login(settings.smtp_username, settings.smtp_password)
-        server.send_message(msg, from_addr=settings.smtp_from_email, to_addrs=all_recipients)
+    req = urllib_request.Request(
+        url="https://api.resend.com/emails",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {settings.resend_api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib_request.urlopen(req, timeout=30) as response:
+            response_body = response.read().decode("utf-8")
+            if response.status >= 400:
+                raise RuntimeError(f"Resend API error: {response_body}")
+
+            parsed = json.loads(response_body) if response_body else {}
+            if not parsed.get("id"):
+                raise RuntimeError(f"Unexpected Resend response: {response_body}")
+
+    except error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        try:
+            parsed = json.loads(body) if body else {}
+            message = parsed.get("message") or parsed.get("error") or body
+        except Exception:
+            message = body or str(exc)
+        raise RuntimeError(f"Resend API request failed: {message}") from exc
+
+    except error.URLError as exc:
+        raise RuntimeError(f"Could not reach Resend API: {exc.reason}") from exc
