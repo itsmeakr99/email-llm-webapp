@@ -1,4 +1,8 @@
-export type DraftRequest = {
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
+  "http://127.0.0.1:8000";
+
+type DraftEmailRequest = {
   to: string[];
   cc: string[];
   purpose: string;
@@ -9,7 +13,7 @@ export type DraftRequest = {
   max_words: number;
 };
 
-export type DraftResponse = {
+type DraftEmailResponse = {
   draft: {
     subject: string;
     body: string;
@@ -18,7 +22,7 @@ export type DraftResponse = {
   preview_cc: string[];
 };
 
-export type SendRequest = {
+type SendEmailRequest = {
   to: string[];
   cc: string[];
   bcc: string[];
@@ -26,7 +30,7 @@ export type SendRequest = {
   body: string;
 };
 
-export type SendResponse = {
+type SendEmailResponse = {
   success: boolean;
   message: string;
   to: string[];
@@ -35,40 +39,90 @@ export type SendResponse = {
   subject: string;
 };
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+type HealthResponse = {
+  status: string;
+  app: string;
+  environment: string;
+};
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    },
-    cache: "no-store"
-  });
+type GmailStatusResponse = {
+  connected: boolean;
+  gmail_email: string | null;
+};
 
+async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    const data = await response.json().catch(() => ({ detail: "Request failed" }));
-    throw new Error(data.detail ?? "Request failed");
+    let detail = `Request failed with status ${response.status}`;
+    try {
+      const data = await response.json();
+      detail = data.detail ?? detail;
+    } catch {
+      // ignore JSON parse errors
+    }
+    throw new Error(detail);
   }
 
   return response.json() as Promise<T>;
 }
 
-export async function draftEmail(payload: DraftRequest): Promise<DraftResponse> {
-  return apiFetch<DraftResponse>("/draft-email", {
-    method: "POST",
-    body: JSON.stringify(payload)
+export async function healthCheck(): Promise<HealthResponse> {
+  const response = await fetch(`${API_BASE_URL}/health`, {
+    method: "GET",
   });
+
+  return parseResponse<HealthResponse>(response);
 }
 
-export async function sendEmail(payload: SendRequest): Promise<SendResponse> {
-  return apiFetch<SendResponse>("/send-email", {
+export async function draftEmail(payload: DraftEmailRequest): Promise<DraftEmailResponse> {
+  const response = await fetch(`${API_BASE_URL}/draft-email`, {
     method: "POST",
-    body: JSON.stringify(payload)
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
   });
+
+  return parseResponse<DraftEmailResponse>(response);
 }
 
-export async function healthCheck(): Promise<{ status: string; app: string; environment: string }> {
-  return apiFetch<{ status: string; app: string; environment: string }>("/health");
+export async function sendEmail(
+  payload: SendEmailRequest,
+  accessToken: string
+): Promise<SendEmailResponse> {
+  const response = await fetch(`${API_BASE_URL}/send-email`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  return parseResponse<SendEmailResponse>(response);
+}
+
+export async function getGmailStatus(
+  accessToken: string
+): Promise<GmailStatusResponse> {
+  const response = await fetch(`${API_BASE_URL}/gmail/status`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  return parseResponse<GmailStatusResponse>(response);
+}
+
+export async function getGoogleAuthUrl(
+  accessToken: string
+): Promise<{ auth_url: string }> {
+  const response = await fetch(`${API_BASE_URL}/auth/google/start`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  return parseResponse<{ auth_url: string }>(response);
 }
