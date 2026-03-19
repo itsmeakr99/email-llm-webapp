@@ -9,17 +9,17 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="")
     openai_model: str = Field(default="gpt-5.4-mini")
 
-    smtp_host: str = Field(default="")
-    smtp_port: int = Field(default=587)
-    smtp_username: str = Field(default="")
-    smtp_password: str = Field(default="")
-    smtp_use_tls: bool = Field(default=True)
-    smtp_from_email: str = Field(default="")
-    smtp_from_name: str = Field(default="")
+    resend_api_key: str = Field(default="")
+    resend_from_email: str = Field(default="")
+    resend_from_name: str = Field(default="")
 
     allow_origins: str = Field(default="*")
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     @property
     def cors_origins(self) -> list[str]:
