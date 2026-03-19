@@ -60,7 +60,7 @@ def google_auth_start() -> RedirectResponse:
 def google_auth_callback(
     code: str | None = Query(default=None),
     error: str | None = Query(default=None),
-) -> RedirectResponse | dict[str, str]:
+) -> dict:
     if error:
         raise HTTPException(status_code=400, detail=f"Google OAuth failed: {error}")
 
@@ -68,13 +68,9 @@ def google_auth_callback(
         raise HTTPException(status_code=400, detail="Missing Google OAuth code.")
 
     try:
-        exchange_google_code_for_tokens(code)
-        if settings.google_oauth_success_redirect_url:
-            return RedirectResponse(url=settings.google_oauth_success_redirect_url)
-        return {"message": "Gmail connected successfully. You can return to the app."}
+        return exchange_google_code_for_tokens(code)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to complete Google OAuth: {exc}") from exc
-
 
 @app.post("/draft-email", response_model=DraftEmailResponse)
 def draft_email(request: DraftEmailRequest) -> DraftEmailResponse:
