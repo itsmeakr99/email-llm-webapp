@@ -9,9 +9,12 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="")
     openai_model: str = Field(default="gpt-5.4-mini")
 
-    resend_api_key: str = Field(default="")
-    resend_from_email: str = Field(default="")
-    resend_from_name: str = Field(default="")
+    google_client_id: str = Field(default="")
+    google_client_secret: str = Field(default="")
+    google_redirect_uri: str = Field(default="")
+    google_sender_email: str = Field(default="")
+    google_refresh_token: str = Field(default="")
+    google_oauth_success_redirect_url: str = Field(default="")
 
     allow_origins: str = Field(default="*")
 
