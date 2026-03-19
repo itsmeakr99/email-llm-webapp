@@ -101,3 +101,12 @@ def generate_and_send(request: GenerateAndSendRequest) -> SendEmailResponse:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to generate and send email: {exc}") from exc
+
+@app.get("/debug-config")
+def debug_config() -> dict[str, bool]:
+    s = get_settings()
+    return {
+        "has_resend_api_key": bool(s.resend_api_key),
+        "has_resend_from_email": bool(s.resend_from_email),
+        "has_resend_from_name": bool(s.resend_from_name),
+    }
