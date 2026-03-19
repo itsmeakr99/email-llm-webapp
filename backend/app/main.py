@@ -63,12 +63,12 @@ def google_auth_start(authorization: str | None = Header(default=None)) -> dict[
         raise HTTPException(status_code=500, detail=f"Failed to start Google OAuth: {exc}") from exc
 
 
-@app.get("/auth/google/callback")
+@app.get("/auth/google/callback", response_model=None)
 def google_auth_callback(
     code: str | None = Query(default=None),
     state: str | None = Query(default=None),
     error: str | None = Query(default=None),
-) -> RedirectResponse | dict[str, str]:
+):
     if error:
         raise HTTPException(status_code=400, detail=f"Google OAuth failed: {error}")
 
@@ -91,7 +91,6 @@ def google_auth_callback(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to complete Google OAuth: {exc}") from exc
-
 
 @app.get("/gmail/status")
 def gmail_status(authorization: str | None = Header(default=None)) -> dict[str, str | bool | None]:
