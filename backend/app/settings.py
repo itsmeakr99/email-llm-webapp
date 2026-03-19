@@ -6,15 +6,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "Email LLM API"
     app_env: str = Field(default="development")
+
     openai_api_key: str = Field(default="")
     openai_model: str = Field(default="gpt-5.4-mini")
 
     google_client_id: str = Field(default="")
     google_client_secret: str = Field(default="")
     google_redirect_uri: str = Field(default="")
-    google_sender_email: str = Field(default="")
-    google_refresh_token: str = Field(default="")
     google_oauth_success_redirect_url: str = Field(default="")
+
+    supabase_url: str = Field(default="")
+    supabase_service_role_key: str = Field(default="")
 
     allow_origins: str = Field(default="*")
 
