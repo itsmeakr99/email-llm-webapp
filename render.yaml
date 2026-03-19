@@ -16,11 +16,17 @@ services:
         sync: false
       - key: OPENAI_MODEL
         value: gpt-5.4-mini
-      - key: RESEND_API_KEY
+      - key: GOOGLE_CLIENT_ID
         sync: false
-      - key: RESEND_FROM_EMAIL
+      - key: GOOGLE_CLIENT_SECRET
         sync: false
-      - key: RESEND_FROM_NAME
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: GOOGLE_SENDER_EMAIL
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+      - key: GOOGLE_OAUTH_SUCCESS_REDIRECT_URL
         sync: false
       - key: ALLOW_ORIGINS
         sync: false
