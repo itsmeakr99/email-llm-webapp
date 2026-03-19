@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from app.models import (
     DraftEmailRequest,
@@ -9,13 +10,17 @@ from app.models import (
     SendEmailRequest,
     SendEmailResponse,
 )
-from app.services.email_service import send_email_via_resend
+from app.services.email_service import (
+    build_google_auth_url,
+    exchange_google_code_for_tokens,
+    send_email_via_gmail,
+)
 from app.services.llm_service import generate_email_draft
 from app.settings import get_settings
 
 settings = get_settings()
 
-app = FastAPI(title=settings.app_name, version="1.2.0")
+app = FastAPI(title=settings.app_name, version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,7 +46,34 @@ def root() -> dict[str, str]:
         "message": "Email LLM API is running.",
         "docs": "/docs",
         "health": "/health",
+        "google_auth_start": "/auth/google/start",
     }
+
+
+@app.get("/auth/google/start")
+def google_auth_start() -> RedirectResponse:
+    auth_url = build_google_auth_url()
+    return RedirectResponse(url=auth_url)
+
+
+@app.get("/auth/google/callback")
+def google_auth_callback(
+    code: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+) -> RedirectResponse | dict[str, str]:
+    if error:
+        raise HTTPException(status_code=400, detail=f"Google OAuth failed: {error}")
+
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing Google OAuth code.")
+
+    try:
+        exchange_google_code_for_tokens(code)
+        if settings.google_oauth_success_redirect_url:
+            return RedirectResponse(url=settings.google_oauth_success_redirect_url)
+        return {"message": "Gmail connected successfully. You can return to the app."}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to complete Google OAuth: {exc}") from exc
 
 
 @app.post("/draft-email", response_model=DraftEmailResponse)
@@ -62,7 +94,7 @@ def draft_email(request: DraftEmailRequest) -> DraftEmailResponse:
 @app.post("/send-email", response_model=SendEmailResponse)
 def send_email(request: SendEmailRequest) -> SendEmailResponse:
     try:
-        send_email_via_resend(request)
+        send_email_via_gmail(request)
         return SendEmailResponse(
             success=True,
             message="Email sent successfully.",
@@ -88,7 +120,7 @@ def generate_and_send(request: GenerateAndSendRequest) -> SendEmailResponse:
             subject=draft.subject,
             body=draft.body,
         )
-        send_email_via_resend(send_request)
+        send_email_via_gmail(send_request)
         return SendEmailResponse(
             success=True,
             message="Email drafted and sent successfully.",
@@ -102,11 +134,14 @@ def generate_and_send(request: GenerateAndSendRequest) -> SendEmailResponse:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to generate and send email: {exc}") from exc
 
+
 @app.get("/debug-config")
 def debug_config() -> dict[str, bool]:
     s = get_settings()
     return {
-        "has_resend_api_key": bool(s.resend_api_key),
-        "has_resend_from_email": bool(s.resend_from_email),
-        "has_resend_from_name": bool(s.resend_from_name),
+        "has_google_client_id": bool(s.google_client_id),
+        "has_google_client_secret": bool(s.google_client_secret),
+        "has_google_redirect_uri": bool(s.google_redirect_uri),
+        "has_google_sender_email": bool(s.google_sender_email),
+        "has_google_refresh_token": bool(s.google_refresh_token),
     }
