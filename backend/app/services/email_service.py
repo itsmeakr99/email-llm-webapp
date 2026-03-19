@@ -51,6 +51,7 @@ def send_email_via_resend(request: SendEmailRequest) -> None:
         headers={
             "Authorization": f"Bearer {settings.resend_api_key}",
             "Content-Type": "application/json",
+            "User-Agent": "email-llm-api/1.0",
         },
         method="POST",
     )
